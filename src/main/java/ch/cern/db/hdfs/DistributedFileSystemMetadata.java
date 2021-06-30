@@ -12,25 +12,29 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.LinkedList;
-import java.util.List;
+import java.net.InetSocketAddress;
+import java.util.*;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.BlockLocation;
-import org.apache.hadoop.fs.BlockStorageLocation;
+import org.apache.hadoop.fs.CommonConfigurationKeys;
 import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RemoteIterator;
-import org.apache.hadoop.fs.VolumeId;
 import org.apache.hadoop.hdfs.DFSClient;
+import org.apache.hadoop.hdfs.DFSConfigKeys;
+import org.apache.hadoop.hdfs.DFSUtilClient;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
+import org.apache.hadoop.hdfs.protocol.ClientDatanodeProtocol;
 import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+import org.apache.hadoop.hdfs.protocol.DatanodeVolumeInfo;
 import org.apache.hadoop.hdfs.protocol.HdfsConstants.DatanodeReportType;
-import org.apache.hadoop.hdfs.server.namenode.NameNode;
+//import org.apache.hadoop.hdfs.server.datanode.DataNode;
+//import org.apache.hadoop.hdfs.server.datanode.StorageLocation;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeStorageReport;
+import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.AccessControlException;
+import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.log4j.Logger;
 
@@ -114,7 +118,7 @@ public class DistributedFileSystemMetadata extends DistributedFileSystem{
 		
 		try {
 			@SuppressWarnings("resource")
-			DFSClient dfsClient = new DFSClient(NameNode.getAddress(getConf()), getConf());
+			DFSClient dfsClient = new DFSClient(DFSUtilClient.getNNAddress(getConf()), getConf());
 			
 			DatanodeStorageReport[] datanodeStorageReports = dfsClient.getDatanodeStorageReport(DatanodeReportType.ALL);
 			
@@ -133,14 +137,13 @@ public class DistributedFileSystemMetadata extends DistributedFileSystem{
 
 	public static HashMap<String, HashMap<Integer, Integer>> computeHostsDiskIdsCount(
 			List<BlockLocation> blockLocations) throws IOException {
-		
+
 		HashMap<String, HashMap<Integer, Integer>> hosts_diskIds = new HashMap<>(); 
 		for (BlockLocation blockLocation : blockLocations) {
 			String[] hosts = blockLocation.getHosts();
 			
-			VolumeId[] volumeIds = null;
-			if(blockLocation instanceof BlockStorageLocation)
-				volumeIds = ((BlockStorageLocation) blockLocation).getVolumeIds();
+			String[] volumeIds = null;
+			volumeIds = blockLocation.getStorageIds();
 			
 			for (int i = 0; i < hosts.length; i++) {
 				String host = hosts[i];
@@ -199,10 +202,11 @@ public class DistributedFileSystemMetadata extends DistributedFileSystem{
 		LOG.info("Collected " + blockLocations.size() + " locations.");
 		
 		if(isHdfsBlocksMetadataEnabled()){
-			BlockStorageLocation[] blockStorageLocations = getFileBlockStorageLocations(blockLocations);
-			
-			blockLocations.clear();
-			blockLocations.addAll(Arrays.asList(blockStorageLocations));
+//			BlockStorageLocation[] blockStorageLocations = getFileBlockStorageLocations(blockLocations);
+//
+//			blockLocations.clear();
+//			blockLocations.addAll(Arrays.asList(blockStorageLocations));
+			LOG.info("VolumnId/DiskId collected from metadata.");
 		}else{
 			LOG.error("VolumnId/DiskId can not be collected since "
 					+ "dfs.datanode.hdfs-blocks-metadata.enabled is not enabled.");
@@ -235,22 +239,53 @@ public class DistributedFileSystemMetadata extends DistributedFileSystem{
 	 * currently no public API to get at the volume id. We'll have to get it by
 	 * accessing the internals.
 	 */
-	public static int getDiskId(VolumeId hdfsVolumeId){
+	public static int getDiskId(String hdfsStorageId){
 		// Initialize the diskId as -1 to indicate it is unknown
 		int diskId = -1;
-
-		if (hdfsVolumeId != null) {
-			String volumeIdString = hdfsVolumeId.toString();
-
-			byte[] volumeIdBytes = StringUtils.hexStringToByte(volumeIdString);
-			if (volumeIdBytes != null && volumeIdBytes.length == 4) {
-				diskId = Utils.toInt(volumeIdBytes);
-			}else if (volumeIdBytes.length == 1) {
-				diskId = (int) volumeIdBytes[0];  // support hadoop-2.0.2
-	        }
-		}
+//		if (hdfsStorageId != null) {
+//			byte[] volumeIdBytes = StringUtils.hexStringToByte(hdfsStorageId);
+//			if (volumeIdBytes != null && volumeIdBytes.length == 4) {
+//				diskId = Utils.toInt(volumeIdBytes);
+//			} else if (volumeIdBytes.length == 1) {
+//				diskId = (int) volumeIdBytes[0];  // support hadoop-2.0.2
+//			}
+//		}
 
 		return diskId;
 	}
 
+	private ClientDatanodeProtocol getDataNodeProxy(String datanode)
+			throws IOException {
+		InetSocketAddress datanodeAddr = NetUtils.createSocketAddr(datanode);
+		// Get the current configuration
+		Configuration conf = getConf();
+
+		// For datanode proxy the server principal should be DN's one.
+		conf.set(CommonConfigurationKeys.HADOOP_SECURITY_SERVICE_USER_NAME_KEY,
+				conf.get(DFSConfigKeys.DFS_DATANODE_KERBEROS_PRINCIPAL_KEY, ""));
+
+		// Create the client
+		ClientDatanodeProtocol dnProtocol =
+				DFSUtilClient.createClientDatanodeProtocolProxy(datanodeAddr, getUGI(), conf,
+						NetUtils.getSocketFactory(conf, ClientDatanodeProtocol.class));
+		return dnProtocol;
+	}
+
+	private static UserGroupInformation getUGI()
+			throws IOException {
+		return UserGroupInformation.getCurrentUser();
+	}
+
+	private void getStorageId2VolumeMappings() {
+		try {
+			ClientDatanodeProtocol datanode = getDataNodeProxy("");
+			List<DatanodeVolumeInfo> volumeReport = datanode.getVolumeReport();
+
+			for(DatanodeVolumeInfo dvi : volumeReport) {
+
+			}
+		} catch (Exception e) {
+			LOG.error(e.getMessage());
+		}
+	}
 }

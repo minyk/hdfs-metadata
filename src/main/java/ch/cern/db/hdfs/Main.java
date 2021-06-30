@@ -20,10 +20,8 @@ import java.util.Map.Entry;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.BlockLocation;
-import org.apache.hadoop.fs.BlockStorageLocation;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.VolumeId;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 import org.slf4j.Logger;
@@ -79,13 +77,12 @@ public class Main extends Configured implements Tool {
 		}
 
 		System.out.println("	Replicas:");
-		VolumeId[] volumeIds = blockLocation instanceof BlockStorageLocation ?
-				(((BlockStorageLocation) blockLocation).getVolumeIds()) : null;
+		String[] storageIds = blockLocation.getStorageIds();
 		String[] hosts = blockLocation.getHosts();
 		String[] names = blockLocation.getNames();
 		String[] topologyPaths = blockLocation.getTopologyPaths();
 		for (int i = 0; i < topologyPaths.length; i++) {
-			int diskId = volumeIds != null ? DistributedFileSystemMetadata.getDiskId(volumeIds[i]) : -1;
+			int diskId = storageIds != null ? DistributedFileSystemMetadata.getDiskId(storageIds[i]) : -1;
 			
 			System.out.println("		Replica (" + i + "):");
 			System.out.println("			Host: " + hosts[i]);
